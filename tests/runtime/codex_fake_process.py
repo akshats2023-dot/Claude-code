@@ -2,6 +2,8 @@
 
 import json
 import sys
+import time
+from pathlib import Path
 
 
 def emit(value):
@@ -13,6 +15,12 @@ def emit(value):
 
 
 mode = sys.argv[1]
+defaults = {
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "user",
+    "sandbox": {"type": "workspaceWrite"},
+    "activePermissionProfile": {"id": ":workspace"},
+}
 creation_id = None
 turn = "turn-1"
 for line in sys.stdin.buffer:
@@ -23,22 +31,29 @@ for line in sys.stdin.buffer:
         emit({"id": request_id, "result": {"userAgent": "codex/0.153.0"}})
     elif method == "initialized":
         pass
-    elif method == "thread/start":
+    elif method in {"thread/start", "thread/resume"}:
         if mode == "delayed-create":
             creation_id = request_id
         else:
             emit(
                 {
                     "id": request_id,
-                    "result": {"thread": {"id": "native-1", "turns": []}},
+                    "result": {"thread": {"id": "native-1", "turns": []}, **defaults},
                 }
             )
     elif method == "test/barrier":
         emit({"id": request_id, "result": {}})
     elif method == "test/release-create":
-        emit({"id": creation_id, "result": {"thread": {"id": "native-1", "turns": []}}})
+        emit(
+            {
+                "id": creation_id,
+                "result": {"thread": {"id": "native-1", "turns": []}, **defaults},
+            }
+        )
         emit({"id": request_id, "result": {}})
     elif method == "turn/start":
+        if mode == "child-warning-on-close":
+            turn = request["params"]["clientUserMessageId"]
         emit(
             {
                 "method": "turn/started",
@@ -159,3 +174,14 @@ for line in sys.stdin.buffer:
         sys.stdout.buffer.flush()
     else:
         emit({"id": request_id, "result": {}})
+
+if mode == "child-warning-on-close":
+    emit(
+        {
+            "method": "guardianWarning",
+            "params": {"threadId": "child", "message": "Child is shutting down"},
+        }
+    )
+    # Keep stdout alive until the parent has processed this close-time event.
+    while not Path(sys.argv[2]).exists():
+        time.sleep(0.01)
